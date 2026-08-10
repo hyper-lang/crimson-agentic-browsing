@@ -1,3 +1,5 @@
+# Crimson with Agentic Browsing
+
 This repo takes project [Crimson](https://github.com/pragseclab/Crimson) from the paper The Poorest Man in Babylon: A Longitudinal Study of Cryptocurrency Investment Scams" and substitutes it's crawling script with agentic extraction in an attempt to increase wallet extraction rates.
 
 The main contribution of this repo is utilizing the [browser-use](https://github.com/browser-use/browser-use) library . While the same pipeline as depicted in the paper is utilized, the following operational changes have been made:
