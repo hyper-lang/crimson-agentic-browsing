@@ -1,0 +1,17 @@
+pika
+pytz
+requests
+html2text
+pytesseract
+python-whois
+pillow
+beautifulsoup4
+lxml
+cachetools
+iocsearcher
+websocket-client
+psutil
+selenium
+wordninja-enhanced
+tldextract
+nltk

@@ -1,0 +1,139 @@
+# Expects a git clone of the Crimson repo at ./Crimson, containing src/,
+# data/, utils/, authentication_crawling/, etc. -- with recv.py, send.py,
+# listen.py, and validate.py inside Crimson/src/ replaced by the rewritten
+# versions (env-configurable hosts instead of hardcoded IPs / localhost).
+#
+# Uses network_mode: host so "localhost" inside every container resolves to
+# this same machine, matching CRIMSON_HOST / RABBITMQ_HOST / etc. defaulting
+# to "localhost". This ONLY works on native Linux Docker Engine -- Docker
+# Desktop (Mac/Windows) does not support host networking the same way.
+
+x-crimson-build: &crimson-build
+  build:
+    context: ./Crimson
+    dockerfile_inline: |
+      FROM python:3.11-slim
+      RUN apt-get update && apt-get install -y --no-install-recommends \
+            tesseract-ocr rsync openssh-client gcc \
+            chromium chromium-driver && \
+          rm -rf /var/lib/apt/lists/*
+      WORKDIR /app
+      ENV PYTHONPATH=/app
+      COPY requirements.txt .
+      RUN pip install --no-cache-dir -r requirements.txt
+      COPY . .
+  image: crimson-python-env:latest
+
+services:
+  rabbitmq:
+    image: rabbitmq:4.3.2-management
+    container_name: rabbitmq
+    network_mode: host
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  certstream-server:
+    image: ghcr.io/reloading01/certstream-server-rust:1.5.2
+    container_name: certstream-server
+    network_mode: host
+
+  crimson-listener:
+    <<: *crimson-build
+    container_name: crimson-listener
+    network_mode: host
+    env_file: .env
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      certstream-server:
+        condition: service_started
+    command: python src/listen.py
+    restart: unless-stopped
+
+  crimson-sender:
+    <<: *crimson-build
+    container_name: crimson-sender
+    network_mode: host
+    env_file: .env
+    depends_on:
+      crimson-listener:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+    command: python src/send.py
+    restart: unless-stopped
+
+  # Second instance so RabbitMQ round-robins "urls" across two consumers --
+  # single-instance throughput (~627/s) couldn't keep up with certstream's
+  # intake rate (~1300/s). Duplicate further (crimson-sender-3, ...) if the
+  # backlog still doesn't stabilize.
+  crimson-sender-2:
+    <<: *crimson-build
+    container_name: crimson-sender-2
+    network_mode: host
+    env_file: .env
+    depends_on:
+      crimson-listener:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+    command: python src/send.py
+    restart: unless-stopped
+
+  # One service per worker so each gets a distinct SYSNO/SCREENNO.
+  # Duplicate this block (crimson-recv-3, -4, ...) to scale out.
+  crimson-recv-1:
+    <<: *crimson-build
+    container_name: crimson-recv-1
+    network_mode: host
+    env_file: .env
+    volumes:
+      - recv1-data:/app/data
+      - recv1-logs:/app/logs
+      - recv1-results:/app/results
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    command: python src/recv.py 1 1
+    restart: unless-stopped
+
+  crimson-recv-2:
+    <<: *crimson-build
+    container_name: crimson-recv-2
+    network_mode: host
+    env_file: .env
+    volumes:
+      - recv2-data:/app/data
+      - recv2-logs:/app/logs
+      - recv2-results:/app/results
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    command: python src/recv.py 2 1
+    restart: unless-stopped
+
+  crimson-validate:
+    <<: *crimson-build
+    container_name: crimson-validate
+    network_mode: host
+    env_file: .env
+    volumes:
+      - validate-results:/app/results
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    command: python src/validate.py
+    restart: unless-stopped
+
+volumes:
+  recv1-data:
+  recv1-logs:
+  recv1-results:
+  recv2-data:
+  recv2-logs:
+  recv2-results:
+  validate-results:
