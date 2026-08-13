@@ -31,7 +31,7 @@ docker compose up -d
 
 Data collected will be stored in the `data` folder, and findings will be in the `results` folder
 
-Future Improvements:
+## Future Improvements:
 - Altering browsing prompts and models to improve extraction rate
 - Use [LOKI](https://arxiv.org/abs/2509.12181) to initially enumerate scam domains
 - Use [LightGBM](https://github.com/lightgbm-org/LightGBM) on pretrained data as the model that determines if a given site is a scam
