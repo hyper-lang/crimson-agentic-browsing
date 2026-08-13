@@ -10,7 +10,7 @@ The main contribution of this repo is utilizing the [browser-use](https://github
 - Moved hardcoded IP addresses to a .env file
 - Added URL and Content Filter Keywords listed in the paper into the scripts
 
-While these changes were designed and architected by Zane Wong, free access to Claude's Sonnet 5 was used to expedite the development process.
+While these changes were designed, architected, and partially programmed by Zane Wong, free access to Claude's Sonnet 5 was used to expedite the development process.
 
 ## How to Use
 
