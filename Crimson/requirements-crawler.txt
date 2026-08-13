@@ -1,0 +1,3 @@
+browser-use>=0.13.1
+playwright
+pika

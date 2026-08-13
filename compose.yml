@@ -24,6 +24,23 @@ x-crimson-build: &crimson-build
       COPY . .
   image: crimson-python-env:latest
 
+# Separate from x-crimson-build: browser-use needs Python >= 3.12 and drives
+# Chrome via Playwright, not Selenium -- `playwright install` handles both
+# the browser binary and its system deps, so no manual apt chromium step
+# like the anchor above needs.
+x-crimson-crawler-build: &crimson-crawler-build
+  build:
+    context: ./Crimson
+    dockerfile_inline: |
+      FROM python:3.12-slim
+      WORKDIR /app
+      ENV PYTHONPATH=/app
+      COPY requirements-crawler.txt .
+      RUN pip install --no-cache-dir -r requirements-crawler.txt
+      RUN python -m playwright install --with-deps chromium
+      COPY . .
+  image: crimson-crawler-env:latest
+
 services:
   rabbitmq:
     image: rabbitmq:4.3.2-management
@@ -129,6 +146,19 @@ services:
     command: python src/validate.py
     restart: unless-stopped
 
+  crimson-crawler:
+    <<: *crimson-crawler-build
+    container_name: crimson-crawler
+    network_mode: host
+    env_file: .env
+    volumes:
+      - crawler-results:/app/results
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    command: python src/crawler.py
+    restart: unless-stopped
+
 volumes:
   recv1-data:
   recv1-logs:
@@ -137,3 +167,4 @@ volumes:
   recv2-logs:
   recv2-results:
   validate-results:
+  crawler-results:

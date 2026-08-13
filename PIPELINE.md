@@ -50,14 +50,17 @@ Certificate Transparency logs
         RabbitMQ queue: confirmed_scams
         |
         v
- [6] crawler_script.py    (not yet wired into Docker; you're rewriting this)  -- Account Creation & Wallet Extraction
-        | should consume "confirmed_scams"; signs up / logs in / extracts
-        | wallet addresses from pages that require authentication to reveal them
+ [6] crawler.py           (container: crimson-crawler)  -- Account Creation & Wallet Extraction
+        | consumes "confirmed_scams"; runs a browser-use agent (Playwright +
+        | Gemini) per domain: signs up, navigates to the deposit/wallet
+        | section, reports any wallet addresses found
+        v
+        results/wallet_extraction.jsonl
 ```
 
-Everything through stage 5 is a long-running Docker service that stays up
+Everything through stage 6 is a long-running Docker service that stays up
 indefinitely (`restart: unless-stopped`), consuming its input queue as
-messages arrive. Stage 6 is not yet connected — see §4.
+messages arrive.
 
 ## 2. Queue topology
 
@@ -67,7 +70,7 @@ messages arrive. Stage 6 is not yet connected — see §4.
 | `cryptoscams_delay` | `send.py` | *(none — TTL only)* | yes | Per-message TTL = `CRIMSON_QUEUE_DELAY_MS` (default 12h); dead-letters into `cryptoscams` on expiry |
 | `cryptoscams` | RabbitMQ (dead-letter) | `recv.py` | yes | The paper's "Central Domain Queue" |
 | `ocr_results` | `recv.py` | `validate.py` | yes | One message per positive OCR match; JSON body is the same `log_data` dict `recv.py` writes to its local `results.log` |
-| `confirmed_scams` | `validate.py` | *(crawler — not yet built)* | yes | One message per LLM-confirmed scam |
+| `confirmed_scams` | `validate.py` | `crawler.py` | yes | One message per LLM-confirmed scam |
 
 All five services connect to the same RabbitMQ instance via `RABBITMQ_HOST`
 (default `localhost`, working because everything runs under
@@ -253,40 +256,62 @@ made it to stage 6.
   such dependency before, since it never touched RabbitMQ at all.
 - Chromium + `chromium-driver` installed via apt directly in the shared
   image (§3.13) — there is no separate Selenium container.
+- `crimson-crawler` builds from its own `x-crimson-crawler-build` anchor,
+  a separate Python 3.12 + Playwright image — it doesn't share
+  `crimson-python-env` with the other five services (§3.18).
 
-## 4. Where the crawler connects (for your rewrite)
+### 3.18 `crawler.py`: stage 6, now implemented (basic version)
 
-`crawler_script.py` is stage 6, downstream of `validate.py`. It should
-consume the `confirmed_scams` queue, same pattern as every other stage:
+Modeled directly on
+[hyper-lang/crimson_browsing](https://github.com/hyper-lang/crimson_browsing)'s
+`scrape_wallets.py` — an agentic approach using
+[`browser-use`](https://github.com/browser-use/browser-use) (Playwright
+under the hood, not Selenium) rather than hand-scripted Selenium steps like
+`authentication_crawling/crawler_script.py` (the original repo's approach,
+left untouched — you're rewriting that logic here, in `crawler.py`, instead
+of extending it directly).
 
-```python
-channel.queue_declare(queue='confirmed_scams', durable=True)
-channel.basic_consume(queue='confirmed_scams', on_message_callback=callback)
-```
+Consumes `confirmed_scams`, same pattern as every other stage. Per domain,
+gives an LLM agent (Gemini by default) a natural-language task: sign up
+with placeholder identity info, navigate to the deposit/wallet section,
+report any wallet addresses found — structured into a typed
+`SignupResult` (Pydantic) rather than free text. Output is appended to
+`results/wallet_extraction.jsonl`.
 
-Each message body is JSON:
-```json
-{
-  "url": "example-scam-domain.com",
-  "reason": "promises",
-  "ioc": { "...": "whatever iocsearcher found, if anything" },
-  "ip_info": { "...": "ip-api.com response" },
-  "title": "<title> tag text"
-}
-```
-`url` is the only field you strictly need to start crawling; `ioc` may
-already contain wallet addresses `iocsearcher` found sitting in plain HTML
-without requiring login — worth checking before assuming every domain needs
-the full sign-up/login flow the paper describes. `reason`, `ip_info`, and
-`title` are along for the ride in case they're useful context for your
-scoring/logging.
+Deliberately basic, per your request — this sets up the environment and
+the queue wiring; the actual task prompt, retry behavior, structured
+output schema, and concurrency are all things to experiment with once it's
+running. A few things worth knowing about the current state:
 
-This keeps the crawler consistent with how every other stage in this
-pipeline is wired — a RabbitMQ consumer, not a file-tailer — so it inherits
-the same durability/restart semantics as `recv.py`/`send.py`/`validate.py`
-for free.
+- **Requires a real `GOOGLE_API_KEY` in `.env`** (Gemini). Nothing runs
+  without one — this isn't optional the way most other env vars in this
+  project are.
+- **`headless=False` in the reference script becomes `headless=True`
+  here.** The original's whole point of a visible browser was letting a
+  human intervene for CAPTCHA/email verification/KYC. There's no display
+  in this container, so right now the agent just reports those cases via
+  its `notes` field instead of solving them. Interactive fallback would
+  need Xvfb/VNC infrastructure added later if you want it.
+- **`prefetch_count=1`** — one browser session running at a time. Each
+  message is a full agentic browsing session against a real site, not
+  cheap to run in parallel yet. Scale the same way as `recv.py`
+  (`crimson-recv-1`/`-2`): duplicate the service block once you've
+  validated it works reliably on a handful of domains.
+- Uses a **separate build** from the other five services
+  (`x-crimson-crawler-build`, Python 3.12) rather than sharing
+  `crimson-python-env` — `browser-use` requires Python ≥3.12 and Playwright
+  manages its own browser install (`playwright install --with-deps
+  chromium`), a different stack from the apt-installed Selenium/Chromium
+  the rest of the pipeline uses.
 
-## 5. Known gaps not addressed here
+`url` is the only field of the `confirmed_scams` message the crawler
+currently uses; `ioc` may already contain wallet addresses `iocsearcher`
+found sitting in plain HTML without requiring login at all — worth
+checking that field before assuming every domain needs the full
+sign-up/login flow. `reason`, `ip_info`, and `title` ride along in the
+message but aren't used by `crawler.py` yet.
+
+## 4. Known gaps not addressed here
 
 These are real, but weren't in scope for this pass — flagging so they don't
 get lost:
@@ -310,8 +335,22 @@ get lost:
   is *not* month-scoped — a domain marked done in one month is skipped
   forever, even in later months. This matches the original script's
   behavior exactly, just noting it's carried forward rather than fixed.
+- **`crawler.py` has no dedup at all.** Unlike every other stage, nothing
+  stops the same domain being crawled twice if it somehow enters
+  `confirmed_scams` more than once. Given each run is a real, possibly
+  detectable sign-up attempt against a live scam site, this is worth
+  fixing before running it unattended for any length of time.
+- **`crawler.py` has no interactive fallback.** `headless=True` means
+  CAPTCHA/email-verification/KYC walls just get reported in `notes`
+  instead of handled — expect a meaningful fraction of domains to dead-end
+  there rather than yield a wallet address.
+- **`crawler.py` result validation is minimal.** `wallet_addresses_found`
+  is whatever the LLM agent claims it saw, unverified — no format
+  checking against the address regexes `iocsearcher` already uses
+  elsewhere in this pipeline. Worth cross-checking before treating the
+  output as ground truth.
 
-## 6. Running it
+## 5. Running it
 
 ```
 docker compose build
