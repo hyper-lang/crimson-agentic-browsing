@@ -37,7 +37,32 @@ class SignupResult(BaseModel):
 
 
 async def signup_and_find_wallet(url: str) -> SignupResult:
-    browser = Browser(headless=HEADLESS)
+    from urllib.parse import urlparse
+    target_host = urlparse(url).hostname or url
+    browser = Browser(
+        headless=HEADLESS,
+        # Confines navigation to the target domain (and its subdomains) --
+        # without this, a malicious page could redirect the agent anywhere,
+        # including sites entirely unrelated to the one being investigated.
+        allowed_domains=[target_host, f"*.{target_host}"],
+        # block_ip_addresses defaults to True in browser-use -- keep it
+        # that way. It blocks direct-IP navigation and localhost/internal
+        # hostnames even when an allowlist is set, which matters here:
+        # a scam page could otherwise try to redirect the agent at your
+        # own infrastructure (SSRF-style) rather than just other domains.
+        # Never set this False for this use case.
+        block_ip_addresses=True,
+        # Scam sites frequently have broken/self-signed TLS. Accepting
+        # that is a real tradeoff (no cert validation at all for this
+        # session) made deliberately so navigation isn't blocked outright --
+        # revisit if that tradeoff doesn't sit right for your threat model.
+        ignore_https_errors=True,
+        # disable_security=False (the default) is never overridden here --
+        # this keeps browser-use's own origin/security checks active.
+        # No user_data_dir is set, so each call gets a fresh, ephemeral
+        # profile -- no cookies, history, or storage persist between runs
+        # or leak from one scam site's session into the next one's.
+    )
     agent = Agent(
         task=(
             f"Go to {url}. Sign up for a new account using "
@@ -56,7 +81,22 @@ async def signup_and_find_wallet(url: str) -> SignupResult:
     )
     try:
         history = await agent.run()
-        result: SignupResult = history.structured_output
+        result: SignupResult | None = history.structured_output
+        if result is None:
+            # agent.run() completed without ever producing a structured
+            # result -- happens when it exhausts retries (e.g. every LLM
+            # call failing, a site the agent couldn't make progress on,
+            # etc). Previously this crashed with AttributeError on
+            # result.signed_up below, which meant the message still got
+            # acked (see callback()) but nothing was ever written to
+            # wallet_extraction.jsonl -- a failed crawl vanished with zero
+            # record instead of being visible as a failure.
+            result = SignupResult(
+                signed_up=False,
+                final_url=url,
+                wallet_addresses_found=[],
+                notes="Agent did not produce a structured result -- likely exhausted retries or failed outright.",
+            )
     finally:
         await browser.close()
     return result
@@ -96,6 +136,19 @@ def callback(ch, method, properties, body):
         )
     except Exception as e:
         logging.error(f"Crawl failed for {domain}: {e}")
+        # Was log-only -- a failure here previously meant the message
+        # still got acked (never retried) but nothing was ever written to
+        # wallet_extraction.jsonl, so a failed crawl vanished with no
+        # trace beyond ephemeral docker logs.
+        os.makedirs('results', exist_ok=True)
+        with open(RESULTS_FILE, 'a') as f:
+            f.write(json.dumps({
+                "url": domain,
+                "signed_up": False,
+                "final_url": None,
+                "wallet_addresses_found": [],
+                "notes": f"Crawl failed with an exception: {e}",
+            }) + '\n')
     ch.basic_ack(delivery_tag=method.delivery_tag)
 
 
