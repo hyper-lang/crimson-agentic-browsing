@@ -108,10 +108,14 @@ services:
     container_name: crimson-recv-1
     network_mode: host
     env_file: .env
+    # Bind mounts instead of named volumes -- these land as real files at
+    # ./data/recv1, ./logs/recv1, ./results/recv1 next to compose.yml,
+    # visible directly on the host instead of hidden inside Docker's own
+    # volume storage.
     volumes:
-      - recv1-data:/app/data
-      - recv1-logs:/app/logs
-      - recv1-results:/app/results
+      - ./data/recv1:/app/data
+      - ./logs/recv1:/app/logs
+      - ./results/recv1:/app/results
     depends_on:
       rabbitmq:
         condition: service_healthy
@@ -124,9 +128,9 @@ services:
     network_mode: host
     env_file: .env
     volumes:
-      - recv2-data:/app/data
-      - recv2-logs:/app/logs
-      - recv2-results:/app/results
+      - ./data/recv2:/app/data
+      - ./logs/recv2:/app/logs
+      - ./results/recv2:/app/results
     depends_on:
       rabbitmq:
         condition: service_healthy
@@ -139,7 +143,7 @@ services:
     network_mode: host
     env_file: .env
     volumes:
-      - validate-results:/app/results
+      - ./results/validate:/app/results
     depends_on:
       rabbitmq:
         condition: service_healthy
@@ -149,22 +153,26 @@ services:
   crimson-crawler:
     <<: *crimson-crawler-build
     container_name: crimson-crawler
-    network_mode: host
+    # Deliberately NOT network_mode: host, unlike every other service.
+    # This is the one container that actively interacts with malicious
+    # sites (clicking, form-filling, following links) rather than just
+    # fetching them -- worth the isolation cost of a normal bridge network.
+    # extra_hosts lets it reach RABBITMQ_HOST=host.docker.internal, which
+    # resolves to the host machine (where rabbitmq's host-networked port
+    # is actually listening) on both Docker Desktop and Linux (20.10+).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      RABBITMQ_HOST: host.docker.internal
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     env_file: .env
     volumes:
-      - crawler-results:/app/results
+      - ./results/crawler:/app/results
     depends_on:
       rabbitmq:
         condition: service_healthy
     command: python src/crawler.py
     restart: unless-stopped
-
-volumes:
-  recv1-data:
-  recv1-logs:
-  recv1-results:
-  recv2-data:
-  recv2-logs:
-  recv2-results:
-  validate-results:
-  crawler-results:
