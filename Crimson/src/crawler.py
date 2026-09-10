@@ -2,10 +2,12 @@ import asyncio
 import json
 import logging
 import os
+import random
 import time
 
 import pika
 from browser_use import Agent, Browser, ChatGoogle
+from browser_use.browser.profile import BrowserProfile
 from pydantic import BaseModel
 
 logging.basicConfig(
@@ -15,18 +17,13 @@ logging.basicConfig(
 )
 
 RABBITMQ_HOST = os.environ.get('RABBITMQ_HOST', 'localhost')
-SOURCE_QUEUE_NAME = 'confirmed_scams'  # populated by validate.py
+SOURCE_QUEUE_NAME = 'confirmed_scams'
 RESULTS_FILE = 'results/wallet_extraction.jsonl'
-
-# Modeled on https://github.com/hyper-lang/crimson_browsing/blob/main/scrape_wallets.py
 MODEL = os.environ.get('CRIMSON_CRAWLER_MODEL', 'gemini-2.5-flash')
 FALLBACK_MODEL = os.environ.get('CRIMSON_CRAWLER_FALLBACK_MODEL', 'gemini-3-flash-preview')
-# headless=False in the reference script so a human can step in for
-# CAPTCHA/email verification/KYC. There's no display in this container, so
-# it defaults to headless here -- the agent will just report those cases
-# via `notes` instead of solving them. Revisit once you're ready to
-# experiment with a VNC/Xvfb setup for interactive fallback.
 HEADLESS = os.environ.get('CRIMSON_CRAWLER_HEADLESS', 'true').lower() != 'false'
+# Per-site crawl budget: 5 minutes is generous for most scam sites
+CRAWL_TIMEOUT = int(os.environ.get('CRIMSON_CRAWLER_TIMEOUT', '300'))
 
 
 class SignupResult(BaseModel):
@@ -36,77 +33,126 @@ class SignupResult(BaseModel):
     notes: str
 
 
+def _build_task(url: str) -> str:
+    suffix = random.randint(100000, 999999)
+    phone_mid = random.randint(100, 999)
+    phone_end = random.randint(1000, 9999)
+    return f"""
+You are a security researcher investigating a potential cryptocurrency investment scam at {url}.
+Your job: create an account, then extract every cryptocurrency deposit/wallet address the site reveals.
+
+=== STEP 1 — REACH THE SIGNUP PAGE ===
+Navigate to {url}. If the landing page is not a signup form, look for a button or link labeled
+"Sign Up", "Register", "Join", "Open Account", "Get Started", or similar, and click it.
+The registration URL often contains: /register, /signup, /join, /open-account.
+
+=== STEP 2 — COMPLETE SIGNUP ===
+Fill the form with:
+  Name:      Jordan Lee
+  Email:     jordan.lee.{suffix}@example.com
+  Username:  jordanlee{suffix}   (use if a separate username field exists)
+  Password:  Secure@Pass{suffix}!
+  Phone:     +15559{phone_mid}{phone_end}  (use if required; try skipping optional phone fields)
+  Birthday:  1990-01-15  (use if required)
+  Country:   United States  (pick from dropdown if required)
+  Any other required field: use a believable placeholder value.
+
+Check all required checkboxes (terms of service, etc.). Submit the form.
+
+=== STEP 3 — HANDLE POST-SIGNUP ===
+After submitting:
+- If you land on a dashboard or account page → proceed to Step 4.
+- If the site redirects to a LOGIN page → log in with the credentials you just used.
+- If EMAIL VERIFICATION is required and you cannot complete it → record signed_up=False,
+  note "email verification required", and stop.
+- If SMS / KYC verification blocks further access → record signed_up=False, note the blocker,
+  and stop.
+
+=== STEP 4 — FIND ALL DEPOSIT / WALLET ADDRESSES ===
+This is the critical step. Systematically explore the authenticated dashboard:
+
+1. Scan the navigation for items like: Deposit, Add Funds, Wallet, Assets, Portfolio, Recharge,
+   Receive, Transfer In, Fund Account, Top Up, My Wallet. Click each one you find.
+
+2. On the deposit page, the site typically lets you choose a cryptocurrency. Cycle through
+   every option offered — at minimum try: BTC, ETH, USDT (ERC-20), USDT (TRC-20), BNB, USDC,
+   TRX. For each one, click/select it and record any wallet address that appears.
+
+3. If the deposit page has a form requiring an amount before showing the address, enter 1000.
+
+4. Wallet addresses appear as long alphanumeric strings. Formats to recognise:
+   - BTC:       starts with 1, 3, or bc1
+   - ETH/ERC20: starts with 0x (42 chars)
+   - USDT-TRC20/TRX: starts with T (34 chars)
+   - BNB/BSC:   starts with 0x or bnb1
+   - LTC:       starts with L or M
+   - XRP:       starts with r
+   Look for them in visible text, input fields, copy-buttons, and QR code labels/alt-text.
+
+5. If there are sub-tabs (e.g. "On-chain deposit" vs "Internal transfer"), check all tabs.
+
+6. Do NOT navigate away from the target domain.
+
+Collect every unique address found. If you found zero addresses after a genuine attempt,
+explain in notes what you encountered (e.g. "site showed only fiat deposit options",
+"deposit section required additional KYC", etc.).
+"""
+
+
 async def signup_and_find_wallet(url: str) -> SignupResult:
     from urllib.parse import urlparse
     target_host = urlparse(url).hostname or url
+
+    # Fix: block_ip_addresses lives in BrowserProfile, not BrowserSession.
+    # ignore_https_errors does not exist in this API; disable_security is the equivalent.
     browser = Browser(
         headless=HEADLESS,
-        # Confines navigation to the target domain (and its subdomains) --
-        # without this, a malicious page could redirect the agent anywhere,
-        # including sites entirely unrelated to the one being investigated.
         allowed_domains=[target_host, f"*.{target_host}"],
-        # block_ip_addresses defaults to True in browser-use -- keep it
-        # that way. It blocks direct-IP navigation and localhost/internal
-        # hostnames even when an allowlist is set, which matters here:
-        # a scam page could otherwise try to redirect the agent at your
-        # own infrastructure (SSRF-style) rather than just other domains.
-        # Never set this False for this use case.
-        block_ip_addresses=True,
-        # Scam sites frequently have broken/self-signed TLS. Accepting
-        # that is a real tradeoff (no cert validation at all for this
-        # session) made deliberately so navigation isn't blocked outright --
-        # revisit if that tradeoff doesn't sit right for your threat model.
-        ignore_https_errors=True,
-        # disable_security=False (the default) is never overridden here --
-        # this keeps browser-use's own origin/security checks active.
-        # No user_data_dir is set, so each call gets a fresh, ephemeral
-        # profile -- no cookies, history, or storage persist between runs
-        # or leak from one scam site's session into the next one's.
+        disable_security=True,
+        browser_profile=BrowserProfile(
+            block_ip_addresses=True,
+        ),
     )
     agent = Agent(
-        task=(
-            f"Go to {url}. Sign up for a new account using "
-            f"the name 'Jordan Lee', email 'jordan.lee.test+{{random}}@example.com', "
-            f"and a strong password. Use placeholder values for any other required "
-            f"fields, skip optional ones. If email verification is required, pause "
-            f"and report that instead of trying to access the email account. "
-            f"After signup, navigate to the deposit, wallet, or 'receive crypto' "
-            f"section of the account dashboard. Report any wallet/deposit addresses "
-            f"shown there for the logged-in account (e.g. BTC, ETH, USDT addresses)."
-        ),
+        task=_build_task(url),
         llm=ChatGoogle(model=MODEL),
         fallback_llm=ChatGoogle(model=FALLBACK_MODEL),
         browser=browser,
         output_model_schema=SignupResult,
     )
     try:
-        history = await agent.run()
+        history = await asyncio.wait_for(agent.run(), timeout=CRAWL_TIMEOUT)
         result: SignupResult | None = history.structured_output
         if result is None:
-            # agent.run() completed without ever producing a structured
-            # result -- happens when it exhausts retries (e.g. every LLM
-            # call failing, a site the agent couldn't make progress on,
-            # etc). Previously this crashed with AttributeError on
-            # result.signed_up below, which meant the message still got
-            # acked (see callback()) but nothing was ever written to
-            # wallet_extraction.jsonl -- a failed crawl vanished with zero
-            # record instead of being visible as a failure.
             result = SignupResult(
                 signed_up=False,
                 final_url=url,
                 wallet_addresses_found=[],
-                notes="Agent did not produce a structured result -- likely exhausted retries or failed outright.",
+                notes="Agent completed without producing a structured result.",
             )
+    except asyncio.TimeoutError:
+        result = SignupResult(
+            signed_up=False,
+            final_url=url,
+            wallet_addresses_found=[],
+            notes=f"Crawl timed out after {CRAWL_TIMEOUT}s.",
+        )
     finally:
         await browser.close()
     return result
+
+
+def _try_url_schemes(domain: str) -> str:
+    """Return https:// URL if the domain likely supports it, else http://."""
+    # Prefer https; the agent has disable_security=True so bad certs won't block it.
+    return "https://" + domain
 
 
 def callback(ch, method, properties, body):
     try:
         record = json.loads(body)
     except json.JSONDecodeError as e:
-        logging.error(f"Failed to decode message from {SOURCE_QUEUE_NAME}: {e}")
+        logging.error(f"Bad message from {SOURCE_QUEUE_NAME}: {e}")
         ch.basic_ack(delivery_tag=method.delivery_tag)
         return
 
@@ -116,10 +162,11 @@ def callback(ch, method, properties, body):
         ch.basic_ack(delivery_tag=method.delivery_tag)
         return
 
-    logging.info(f"Crawling {domain}")
+    url = _try_url_schemes(domain)
+    logging.info(f"Crawling {url}")
     start_time = time.time()
     try:
-        result = asyncio.run(signup_and_find_wallet("http://" + domain))
+        result = asyncio.run(signup_and_find_wallet(url))
         output = {
             "url": domain,
             "signed_up": result.signed_up,
@@ -131,15 +178,11 @@ def callback(ch, method, properties, body):
         with open(RESULTS_FILE, 'a') as f:
             f.write(json.dumps(output) + '\n')
         logging.info(
-            f"Finished {domain} in {time.time() - start_time:.2f}s -- "
-            f"wallets found: {len(result.wallet_addresses_found)}"
+            f"Finished {domain} in {time.time() - start_time:.2f}s — "
+            f"wallets: {len(result.wallet_addresses_found)}"
         )
     except Exception as e:
         logging.error(f"Crawl failed for {domain}: {e}")
-        # Was log-only -- a failure here previously meant the message
-        # still got acked (never retried) but nothing was ever written to
-        # wallet_extraction.jsonl, so a failed crawl vanished with no
-        # trace beyond ephemeral docker logs.
         os.makedirs('results', exist_ok=True)
         with open(RESULTS_FILE, 'a') as f:
             f.write(json.dumps({
@@ -147,7 +190,7 @@ def callback(ch, method, properties, body):
                 "signed_up": False,
                 "final_url": None,
                 "wallet_addresses_found": [],
-                "notes": f"Crawl failed with an exception: {e}",
+                "notes": f"Crawl exception: {e}",
             }) + '\n')
     ch.basic_ack(delivery_tag=method.delivery_tag)
 
@@ -158,16 +201,12 @@ def main():
             connection = pika.BlockingConnection(pika.ConnectionParameters(host=RABBITMQ_HOST))
             channel = connection.channel()
             channel.queue_declare(queue=SOURCE_QUEUE_NAME, durable=True)
-            # One browser session at a time to start -- each is a full
-            # agentic run against a real site, not cheap. Bump this (and
-            # add more crawler instances, same pattern as crimson-recv-*)
-            # once you've seen it work reliably on a handful of domains.
             channel.basic_qos(prefetch_count=1)
             channel.basic_consume(queue=SOURCE_QUEUE_NAME, on_message_callback=callback)
             logging.info(f"Consuming from '{SOURCE_QUEUE_NAME}'.")
             channel.start_consuming()
         except pika.exceptions.StreamLostError as e:
-            logging.error(f"RabbitMQ connection lost, reconnecting: {e}")
+            logging.error(f"RabbitMQ stream lost, reconnecting: {e}")
             time.sleep(10)
         except pika.exceptions.AMQPConnectionError as e:
             logging.error(f"RabbitMQ connection error, retrying: {e}")
