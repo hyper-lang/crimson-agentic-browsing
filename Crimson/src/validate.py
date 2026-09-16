@@ -196,13 +196,20 @@ def callback(ch, method, properties, body):
         done_domains.add(domain)
         with open('done.txt', 'a') as donefile:
             donefile.write(f'{domain}\n')
-        logging.info(f'Successfully processed and logged domain {domain}')
+        processing_time = time.time() - start_time
+        logging.info(f'Successfully processed {domain} in {processing_time:.2f}s — answer: {chat_response["answer"]}')
+        ch.basic_ack(delivery_tag=method.delivery_tag)
     else:
-        logging.error(f'Failed to process domain {domain}')
-
-    processing_time = time.time() - start_time
-    logging.info(f'Processed domain {domain} in {processing_time:.2f} seconds.')
-    ch.basic_ack(delivery_tag=method.delivery_tag)
+        # Ollama is down or failed all retries — requeue the message so it
+        # isn't silently lost. Back off before returning so we don't spin
+        # tight against a down server.
+        processing_time = time.time() - start_time
+        logging.error(
+            f'Failed to process domain {domain} after {processing_time:.2f}s — '
+            f'requeueing (Ollama down?)'
+        )
+        time.sleep(5)
+        ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
 
 
 def main():
