@@ -2,7 +2,7 @@
 
 This repo takes project [Crimson](https://github.com/pragseclab/Crimson) from the paper The Poorest Man in Babylon: A Longitudinal Study of Cryptocurrency Investment Scams" and substitutes it's crawling script with agentic extraction in an attempt to increase wallet extraction rates.
 
-The main contribution of this repo is utilizing the [browser-use](https://github.com/browser-use/browser-use) library . While the same pipeline as depicted in the paper is utilized, the following operational changes have been made:
+The main contribution of this repo is agentic wallet extraction with wallet_browser (`Crimson/vendor/wallet_browser`): a [Scrapling](https://github.com/D4Vinci/Scrapling) stealth browser driven by Claude through the Claude Code CLI. While the same pipeline as depicted in the paper is utilized, the following operational changes have been made:
 - Dockerize python scripts, use of RabbitMQ and Certstream server Docker containers
 - Replace the [elixir certstream server](https://github.com/CaliDog/certstream-server) with [certstream_server_rust](https://github.com/reloading01/certstream-server-rust)
 - Replaced [Wordninja](https://github.com/keredson/wordninja) with [Wordninja Enhanced](https://github.com/timminator/wordninja-enhanced)

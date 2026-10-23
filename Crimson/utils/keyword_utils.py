@@ -5,19 +5,15 @@ from bs4 import BeautifulSoup, Comment
 from nltk.stem import PorterStemmer
 
 # WORD_MODEL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'improved_crypto_words.txt.gz')
-keyword_in_url = { # Table 11, Appendix D: "URL-filter" = Invest Words + Coin Words (paper 3696410.3714588)
+# Table 11, Appendix D: the "URL-filter" column -- the paper's 36 keywords
+# (paper 3696410.3714588). This used to be URL-filter + Coin Words, which also
+# matched short coin tokens like "dot", "sol", "ada" and "neo" in domains.
+keyword_in_url = {
     "crypto", "fx", "earn", "deposit", "trade", "capital", "invest", "global",
     "bit", "mining", "ltd", "finance", "miner", "trust", "profit", "asset",
     "cardano", "funding", "capitals", "fund", "limited", "chain", "digital",
     "btc", "assets", "wealth", "coin", "option", "prime", "bitcoin", "exchange",
-    "money", "eth", "ethereum", "cryptocurrency", "ripple", "binance",
-    "shiba inu", "dogecoin", "solana", "tether", "tron", "polkadot", "xrp",
-    "ada", "bnb", "shib", "doge", "sol", "usdt", "trx", "dot", "algo",
-    "litecoin", "chainlink", "uniswap", "pancakeswap", "avalanche", "neo",
-    "iota", "aave", "luna", "synthetix", "theta", "grt", "1inch", "sushi",
-    "matic", "btcusd", "usdbtc", "ethusd", "usdeth", "adausd", "usdada",
-    "xrpusd", "usdxrp", "bnbusd", "usdbnb", "shibusd", "usdshib", "dogeusd",
-    "usddoge", "solusd", "usdsol", "usdtusd", "usdusdt",
+    "money", "eth", "ethereum", "cryptocurrency",
 }
 
 domain_whitelist = { # Update as needed!

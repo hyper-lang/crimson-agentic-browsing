@@ -1,2 +1,15 @@
 .env*
 !.env.example
+
+Crimson/data/*/
+!Crimson/data/.gitkeep
+
+__pycache__/
+*.pyc
+
+# Bind-mounted output from compose.yml -- real screenshots, HTML, OCR
+# results, wallet data, and operational logs land here now instead of in
+# Docker-managed named volumes. Large, per-domain, not source.
+/data/
+/logs/
+/results/

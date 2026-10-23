@@ -24,20 +24,26 @@ x-crimson-build: &crimson-build
       COPY . .
   image: crimson-python-env:latest
 
-# Separate from x-crimson-build: browser-use needs Python >= 3.12 and drives
-# Chrome via Playwright, not Selenium -- `playwright install` handles both
-# the browser binary and its system deps, so no manual apt chromium step
-# like the anchor above needs.
+# Same image as wallet_browser's Dockerfile (vendored at
+# Crimson/vendor/wallet_browser): Scrapling's stealth session on patchright's
+# bundled Chromium, plus the Claude Code CLI that wallet_browser shells out
+# to. Separate from x-crimson-build since it needs Python >= 3.12.
 x-crimson-crawler-build: &crimson-crawler-build
   build:
     context: ./Crimson
     dockerfile_inline: |
       FROM python:3.12-slim
+      RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && \
+          rm -rf /var/lib/apt/lists/*
+      # Claude Code CLI (native installer, no Node needed)
+      RUN curl -fsSL https://claude.ai/install.sh | bash
+      ENV PATH="/root/.local/bin:$${PATH}"
       WORKDIR /app
       ENV PYTHONPATH=/app
+      COPY vendor/wallet_browser ./vendor/wallet_browser
       COPY requirements-crawler.txt .
-      RUN pip install --no-cache-dir -r requirements-crawler.txt
-      RUN python -m playwright install --with-deps chromium
+      RUN pip install --no-cache-dir ./vendor/wallet_browser -r requirements-crawler.txt && \
+          python -m patchright install --with-deps chromium
       COPY . .
   image: crimson-crawler-env:latest
 
@@ -137,6 +143,66 @@ services:
     command: python src/recv.py 2 1
     restart: unless-stopped
 
+  crimson-recv-3:
+    <<: *crimson-build
+    container_name: crimson-recv-3
+    network_mode: host
+    env_file: .env
+    volumes:
+      - ./data/recv3:/app/data
+      - ./logs/recv3:/app/logs
+      - ./results/recv3:/app/results
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    command: python src/recv.py 3 1
+    restart: unless-stopped
+
+  crimson-recv-4:
+    <<: *crimson-build
+    container_name: crimson-recv-4
+    network_mode: host
+    env_file: .env
+    volumes:
+      - ./data/recv4:/app/data
+      - ./logs/recv4:/app/logs
+      - ./results/recv4:/app/results
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    command: python src/recv.py 4 1
+    restart: unless-stopped
+
+  crimson-recv-5:
+    <<: *crimson-build
+    container_name: crimson-recv-5
+    network_mode: host
+    env_file: .env
+    volumes:
+      - ./data/recv5:/app/data
+      - ./logs/recv5:/app/logs
+      - ./results/recv5:/app/results
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    command: python src/recv.py 5 1
+    restart: unless-stopped
+
+  crimson-recv-6:
+    <<: *crimson-build
+    container_name: crimson-recv-6
+    network_mode: host
+    env_file: .env
+    volumes:
+      - ./data/recv6:/app/data
+      - ./logs/recv6:/app/logs
+      - ./results/recv6:/app/results
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    command: python src/recv.py 6 1
+    restart: unless-stopped
+
   crimson-validate:
     <<: *crimson-build
     container_name: crimson-validate
@@ -160,10 +226,15 @@ services:
     # extra_hosts lets it reach RABBITMQ_HOST=host.docker.internal, which
     # resolves to the host machine (where rabbitmq's host-networked port
     # is actually listening) on both Docker Desktop and Linux (20.10+).
+    # The browser itself can't reach host.docker.internal: wallet_browser's
+    # scope guard blocks localhost/private addresses for every page request.
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
       RABBITMQ_HOST: host.docker.internal
+    # Same lockdown as wallet_browser's run.sh. Chromium's own sandbox is off
+    # in containers (wallet_browser detects /.dockerenv), so this is the
+    # isolation layer. Needs CLAUDE_CODE_OAUTH_TOKEN in .env.
     cap_drop:
       - ALL
     security_opt:

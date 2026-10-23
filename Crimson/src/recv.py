@@ -24,24 +24,21 @@ from nltk.stem import PorterStemmer
 
 stemmer = PorterStemmer()
 
-# Table 11, Appendix D (paper 3696410.3714588). Hoisted to module scope --
-# these were previously rebuilt on every single OCR() call.
-INVEST_WORDS = [
-    "crypto", "fx", "earn", "deposit", "trade", "capital", "invest", "global",
-    "bit", "mining", "ltd", "finance", "trade", "miner", "trust", "profit",
-    "asset", "cardano", "funding", "capitals", "fund", "limited", "chain",
-    "digital", "btc", "assets", "wealth", "coin", "option", "prime", "bitcoin",
-    "exchange", "money", "eth", "ethereum", "cryptocurrency",
-]
+# Table 11, Appendix D (paper 3696410.3714588), Content-Filter columns.
+# Invest Words is the single word "invest". This used to hold the 36-word
+# URL-filter column instead, and "invest" was put at the head of COIN_WORDS,
+# so any page that said "invest" passed the coin check without mentioning
+# crypto at all -- the main source of non-scam domains downstream.
+INVEST_WORDS = ["invest"]
 COIN_WORDS = [
-    "invest", "crypto", "bitcoin", "ethereum", "cardano", "ripple", "binance",
-    "shiba inu", "dogecoin", "solana", "tether", "tron", "polkadot", "eth",
-    "btc", "xrp", "ada", "bnb", "shib", "doge", "sol", "usdt", "trx", "dot",
-    "algo", "litecoin", "chainlink", "uniswap", "pancakeswap", "avalanche",
-    "neo", "iota", "aave", "luna", "synthetix", "theta", "grt", "1inch",
-    "sushi", "matic", "btcusd", "usdbtc", "ethusd", "usdeth", "adausd",
-    "usdada", "xrpusd", "usdxrp", "bnbusd", "usdbnb", "shibusd", "usdshib",
-    "dogeusd", "usddoge", "solusd", "usdsol", "usdtusd", "usdusdt",
+    "cryptocurrency", "crypto", "bitcoin", "ethereum", "cardano", "ripple",
+    "binance", "shiba inu", "dogecoin", "solana", "tether", "tron", "polkadot",
+    "eth", "btc", "xrp", "ada", "bnb", "shib", "doge", "sol", "usdt", "trx",
+    "dot", "algo", "litecoin", "chainlink", "uniswap", "pancakeswap",
+    "avalanche", "neo", "iota", "aave", "luna", "synthetix", "theta", "grt",
+    "1inch", "sushi", "matic", "btcusd", "usdbtc", "ethusd", "usdeth",
+    "adausd", "usdada", "xrpusd", "usdxrp", "bnbusd", "usdbnb", "shibusd",
+    "usdshib", "dogeusd", "usddoge", "solusd", "usdsol", "usdtusd", "usdusdt",
 ]
 CONTEXT_WORDS = [
     "deposit", "withdraw", "reward", "growth", "gain", "capital", "potential",

@@ -35,12 +35,22 @@ REQUEST_TIMEOUT = int(os.environ.get('OLLAMA_TIMEOUT', '120'))
 
 newYorkTz = pytz.timezone("America/New_York")
 
+# Paper Appendix B, verbatim, plus the output-format example. The previous
+# prompt only described the JSON format and never said what "yes" meant, so
+# the model answered whatever question the page text implied (usually "is
+# this firm legitimate?") -- confirmed "scams" came back with reasons like
+# "transparency", "legitimate" and "credibility".
 SYSTEM_PROMPT = (
-    'You are a financial advisor programmed to provide responses strictly in JSON format. '
-    'Each response must contain keys "answer" and "reason". The answer key can have a value '
-    'of either "yes" or "no", and the reason key should have a one word reason. Example: '
-    'Input: "Invest now for a guaranteed return of 10 percent in one month." '
-    'Output: {"answer": "yes", "reason": "promises"}. Please adhere strictly to this output format.'
+    "You are a financial advisor programmed to respond in JSON format. Your responses are "
+    "limited to 'yes' or 'no', represented by the 'answer' key, and you must provide a "
+    "one-word reasoning for your decision under the 'reason' key. Be sure of your answer. "
+    "Determine if the provided text likely originates from a cryptocurrency investment scam "
+    "website, characterized by promises of high returns from cryptocurrency investments. If "
+    "the text suggests a low probability of being a scam, does not prompt users to log in/sign "
+    "up, seems like a news site, or does not solicit users to contact the site for investing "
+    "in cryptocurrency, respond 'no'. "
+    'Example: Input: "Invest now for a guaranteed return of 10 percent in one month." '
+    'Output: {"answer": "yes", "reason": "promises"}.'
 )
 
 

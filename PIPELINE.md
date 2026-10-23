@@ -51,9 +51,9 @@ Certificate Transparency logs
         |
         v
  [6] crawler.py           (container: crimson-crawler)  -- Account Creation & Wallet Extraction
-        | consumes "confirmed_scams"; runs a browser-use agent (Playwright +
-        | Gemini) per domain: signs up, navigates to the deposit/wallet
-        | section, reports any wallet addresses found
+        | consumes "confirmed_scams"; runs wallet_browser (Scrapling stealth
+        | Chromium + Claude Code CLI) per domain: signs up, opens the
+        | deposit form per coin, extracts source-verified addresses
         v
         results/wallet_extraction.jsonl
 ```
@@ -104,11 +104,20 @@ above), reconnecting on `StreamLostError`/`AMQPConnectionError` the same way
 `keyword_utils.py`'s `keyword_in_url` and `recv.py`'s `invest_words` /
 `coin_words` / `context_words` were all empty (`# Update as needed!`),
 meaning the domain filter rejected everything and the content filter never
-matched anything. Filled in verbatim from the paper's Appendix D, Table 11:
-- `keyword_in_url` = Invest Words ∪ Coin Words (36 + 58 terms, the paper's
-  "URL-filter" column grouping)
-- `recv.py`'s three lists = Invest Words, Coin Words, Context Words
-  separately, matching `OCR()`'s existing three-way intersection check.
+matched anything. Filled in from the paper's Appendix D, Table 11, which
+has four columns: URL-filter, then the Content-Filter's Invest, Coin and
+Context Words.
+- `keyword_in_url` = the URL-filter column (the 36 keywords of §2.1.2).
+- `recv.py`'s three lists = Invest Words (just "invest"), Coin Words,
+  Context Words, matching `OCR()`'s three-way intersection check.
+
+An earlier version misread the table: Invest Words held the URL-filter
+column, "invest" sat at the head of Coin Words, and `keyword_in_url` was
+URL-filter + Coin Words. Since "invest" counted as a coin word, any page
+that mentioned investing passed without saying anything about crypto.
+Replaying September's 8,919 OCR positives (OCR text only), the corrected
+lists pass 580 instead of 4,837, and 279 of the 304 "confirmed scams" no
+longer pass at all.
 
 ### 3.4 `listen.py` double-JSON-encoding
 `listen.py` publishes `body=json.dumps(message)`, where `message` is
@@ -151,6 +160,11 @@ date convention) instead of requiring a hand-edit. `scams_{month}.txt` /
 written in the same format as before, so anything downstream that depended
 on those files still works. On a "yes" classification, also publishes to
 `confirmed_scams` for the crawler.
+
+The system prompt is the paper's Appendix B prompt. The repo's version only
+described the JSON output format and never stated the question, so "yes"
+drifted to meaning "legitimate": the confirmed-scam log was full of
+reasons like "transparency" and "credibility".
 
 One deliberate simplification: the original prompt structure was
 `[system, user(empty), assistant("Sure, I will now assess..."), user(text)]`
@@ -260,56 +274,31 @@ made it to stage 6.
   a separate Python 3.12 + Playwright image — it doesn't share
   `crimson-python-env` with the other five services (§3.18).
 
-### 3.18 `crawler.py`: stage 6, now implemented (basic version)
+### 3.18 `crawler.py`: stage 6 = wallet_browser
 
-Modeled directly on
-[hyper-lang/crimson_browsing](https://github.com/hyper-lang/crimson_browsing)'s
-`scrape_wallets.py` — an agentic approach using
-[`browser-use`](https://github.com/browser-use/browser-use) (Playwright
-under the hood, not Selenium) rather than hand-scripted Selenium steps like
-`authentication_crawling/crawler_script.py` (the original repo's approach,
-left untouched — you're rewriting that logic here, in `crawler.py`, instead
-of extending it directly).
+Stage 6 runs [wallet_browser](Crimson/vendor/wallet_browser/README.md),
+vendored under `Crimson/vendor/wallet_browser` so the server only needs this
+repo: Scrapling's stealth session on patchright Chromium (with a Cloudflare
+solver), driven step by step by Claude through the Claude Code CLI. The
+`crimson-crawler` image is wallet_browser's own Dockerfile (Python 3.12,
+Claude Code CLI, patchright Chromium), and the service keeps run.sh's
+lockdown: bridge network, `cap_drop: ALL`, `no-new-privileges`.
 
-Consumes `confirmed_scams`, same pattern as every other stage. Per domain,
-gives an LLM agent (Gemini by default) a natural-language task: sign up
-with placeholder identity info, navigate to the deposit/wallet section,
-report any wallet addresses found — structured into a typed
-`SignupResult` (Pydantic) rather than free text. Output is appended to
-`results/wallet_extraction.jsonl`.
+`crawler.py` is now only the queue glue: it consumes `confirmed_scams` and
+calls `wallet_browser.crawler.crawl()` per domain. Results (including the
+throwaway account credentials) go to `results/wallet_extraction.jsonl`;
+crawled domains go to `results/crawled.txt` so a redelivered message
+doesn't sign up twice.
 
-Deliberately basic, per your request — this sets up the environment and
-the queue wiring; the actual task prompt, retry behavior, structured
-output schema, and concurrency are all things to experiment with once it's
-running. A few things worth knowing about the current state:
-
-- **Requires a real `GOOGLE_API_KEY` in `.env`** (Gemini). Nothing runs
-  without one — this isn't optional the way most other env vars in this
-  project are.
-- **`headless=False` in the reference script becomes `headless=True`
-  here.** The original's whole point of a visible browser was letting a
-  human intervene for CAPTCHA/email verification/KYC. There's no display
-  in this container, so right now the agent just reports those cases via
-  its `notes` field instead of solving them. Interactive fallback would
-  need Xvfb/VNC infrastructure added later if you want it.
-- **`prefetch_count=1`** — one browser session running at a time. Each
-  message is a full agentic browsing session against a real site, not
-  cheap to run in parallel yet. Scale the same way as `recv.py`
-  (`crimson-recv-1`/`-2`): duplicate the service block once you've
-  validated it works reliably on a handful of domains.
-- Uses a **separate build** from the other five services
-  (`x-crimson-crawler-build`, Python 3.12) rather than sharing
-  `crimson-python-env` — `browser-use` requires Python ≥3.12 and Playwright
-  manages its own browser install (`playwright install --with-deps
-  chromium`), a different stack from the apt-installed Selenium/Chromium
-  the rest of the pipeline uses.
-
-`url` is the only field of the `confirmed_scams` message the crawler
-currently uses; `ioc` may already contain wallet addresses `iocsearcher`
-found sitting in plain HTML without requiring login at all — worth
-checking that field before assuming every domain needs the full
-sign-up/login flow. `reason`, `ip_info`, and `title` ride along in the
-message but aren't used by `crawler.py` yet.
+- **Requires `CLAUDE_CODE_OAUTH_TOKEN` in `.env`** (`claude setup-token`).
+  Settings are wallet_browser's `WALLET_BROWSER_*` variables.
+- The crawl runs on a worker thread and is acked through
+  `add_callback_threadsafe`. The previous browser-use version crawled inside
+  the pika callback, which blocked heartbeats for the whole crawl: RabbitMQ
+  dropped the connection, the ack failed, and the same domain was
+  redelivered and crawled again indefinitely.
+- Addresses must appear verbatim in the page source (wallet_browser's
+  `verify_addresses`), so they are no longer just whatever the LLM claimed.
 
 ## 4. Known gaps not addressed here
 
@@ -335,20 +324,9 @@ get lost:
   is *not* month-scoped — a domain marked done in one month is skipped
   forever, even in later months. This matches the original script's
   behavior exactly, just noting it's carried forward rather than fixed.
-- **`crawler.py` has no dedup at all.** Unlike every other stage, nothing
-  stops the same domain being crawled twice if it somehow enters
-  `confirmed_scams` more than once. Given each run is a real, possibly
-  detectable sign-up attempt against a live scam site, this is worth
-  fixing before running it unattended for any length of time.
-- **`crawler.py` has no interactive fallback.** `headless=True` means
-  CAPTCHA/email-verification/KYC walls just get reported in `notes`
-  instead of handled — expect a meaningful fraction of domains to dead-end
-  there rather than yield a wallet address.
-- **`crawler.py` result validation is minimal.** `wallet_addresses_found`
-  is whatever the LLM agent claims it saw, unverified — no format
-  checking against the address regexes `iocsearcher` already uses
-  elsewhere in this pipeline. Worth cross-checking before treating the
-  output as ground truth.
+- **Email verification still dead-ends.** The persona uses `@example.com`
+  addresses; the paper used Mailinator inboxes, which can receive the
+  verification mail.
 
 ## 5. Running it
 

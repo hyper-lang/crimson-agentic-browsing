@@ -1,0 +1,19 @@
+[project]
+name = "wallet-browser"
+version = "0.1.0"
+description = "Sign up on crypto scam sites and extract the deposit/wallet addresses they hand out, using a Scrapling stealth browser driven by Claude Code."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    # crawler.py calls Scrapling's private _cloudflare_solver(); re-check it before bumping.
+    "scrapling[fetchers]==0.4.15",
+    "pydantic>=2",
+    "python-dotenv",
+]
+
+[project.scripts]
+wallet-browser = "wallet_browser.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
