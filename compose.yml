@@ -58,11 +58,15 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
+    restart: unless-stopped
 
   certstream-server:
     image: ghcr.io/reloading01/certstream-server-rust:1.5.2
     container_name: certstream-server
     network_mode: host
+    # Every domain enters through here; without a restart policy one OOM
+    # kill silently stopped the whole pipeline's intake.
+    restart: unless-stopped
 
   crimson-listener:
     <<: *crimson-build

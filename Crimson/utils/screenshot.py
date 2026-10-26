@@ -38,7 +38,10 @@ class SeleniumScreenshot:
         service = Service(executable_path=CHROMEDRIVER_PATH)
         browser = None
         try:
-            service.start()
+            # No service.start() here: webdriver.Chrome() starts the service
+            # itself, and Service.start() spawns a new chromedriver every call,
+            # so starting it twice orphaned one chromedriver per attempt
+            # (~1000 per worker after a day, until the OOM killer stepped in).
             browser = webdriver.Chrome(options=self.options, service=service)
             browser.set_page_load_timeout(20)
             browser.get("http://" + url)
@@ -54,10 +57,9 @@ class SeleniumScreenshot:
         finally:
             if browser:
                 browser.quit()
-            # If service.start() itself raised, service was constructed but
-            # never actually started -- stop() on some driver versions can
-            # raise in that state. Don't let a teardown error mask the real
-            # exception that already got caught above.
+            # Covers webdriver.Chrome() failing after it started chromedriver
+            # (browser is None then, so quit() never ran). stop() can raise on
+            # a never-started service; don't let that mask the real error.
             try:
                 service.stop()
             except Exception:
