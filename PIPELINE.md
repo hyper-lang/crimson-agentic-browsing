@@ -229,12 +229,17 @@ paths are now `CRIMSON_CHROME_BINARY` / `CRIMSON_CHROMEDRIVER_PATH` env
 vars, defaulting to the apt-installed locations
 (`/usr/bin/chromium`, `/usr/bin/chromedriver`).
 
-One thing that turned out *not* to be a gap, contrary to an earlier version
-of this document: `screenshot_retrier()` already constructs a brand new
-`Service` + `webdriver.Chrome` on every single call and tears both down in
-`finally` — so a crashed or stale browser session self-heals on the very
-next attempt. There's no persistent-driver resilience issue here; §5 in an
-earlier draft of this document was wrong about that.
+`screenshot_retrier()` builds a fresh `Service` + `webdriver.Chrome` per
+attempt and tears both down in `finally`, so a crashed browser session
+self-heals on the next attempt. It used to leak, though: it called
+`service.start()` itself before passing the service to
+`webdriver.Chrome()`, which starts it again. In Selenium 4 every
+`Service.start()` spawns a new chromedriver, so the first one was orphaned
+on every attempt (up to two per domain). After a day each recv worker had
+~1,000 stray chromedrivers and 2-3 GiB of memory, the host ran out of
+memory, and the OOM killer took recv workers and `certstream-server`. The
+manual `start()` is gone; a worker now holds no chromedriver between
+domains.
 
 ### 3.15 Raw HTML now persisted to disk
 Previously, the HTML fetched by `is_domain_available()` only ever existed
@@ -264,15 +269,19 @@ made it to stage 6.
 - A shared `x-crimson-build` anchor so every Python service builds from the
   same Dockerfile instead of only one service having a `build:` block (the
   original cause of the very first `pull access denied` errors).
-- Per-worker named volumes (`recv1-data`, `recv1-logs`, `recv1-results`,
-  same for `recv2`) so `SYSNO=1` and `SYSNO=2` don't collide on disk.
+- Six recv workers (`crimson-recv-1` ... `-6`), each with its own bind
+  mounts (`./data/recvN`, `./logs/recvN`, `./results/recvN`) so their
+  `SYSNO`s don't collide on disk.
+- `restart: unless-stopped` on every service, including `rabbitmq` and
+  `certstream-server`. certstream had none, so a single OOM kill stopped
+  all intake until someone noticed.
 - `crimson-validate` now depends on `rabbitmq` being healthy — it had no
   such dependency before, since it never touched RabbitMQ at all.
 - Chromium + `chromium-driver` installed via apt directly in the shared
   image (§3.13) — there is no separate Selenium container.
 - `crimson-crawler` builds from its own `x-crimson-crawler-build` anchor,
-  a separate Python 3.12 + Playwright image — it doesn't share
-  `crimson-python-env` with the other five services (§3.18).
+  wallet_browser's image (Python 3.12, Claude Code CLI, patchright
+  Chromium) -- it doesn't share `crimson-python-env` (§3.18).
 
 ### 3.18 `crawler.py`: stage 6 = wallet_browser
 
@@ -342,3 +351,35 @@ as covered earlier in this conversation — watch `urls` drain,
 `confirmed_scams` receive LLM-confirmed ones. There's no Selenium Grid
 console to check anymore (§3.13) — Chrome runs inside `crimson-recv-1`/`-2`
 directly, so screenshot failures show up in those containers' own logs.
+
+## 6. Change log
+
+### October 2026: classification fixes, wallet_browser crawler, recv stability
+
+September's run produced 304 "confirmed scams" that were almost all
+legitimate sites (wealth managers, charities, a health-funding project),
+and the crawler extracted 0 wallets from 313 crawls. Causes and fixes:
+
+| Problem | Effect | Fix | Section |
+|---|---|---|---|
+| Table 11 columns misread: Invest Words held the URL-filter column and "invest" was listed as a Coin Word | any page saying "invest" passed the content filter without mentioning crypto | lists match Table 11; URL filter is the 36 URL-filter words only | §3.3 |
+| validate.py prompt never stated the question | "yes" drifted to mean "legitimate" (reasons: transparency, legitimate, credibility) | paper's Appendix B prompt | §3.7 |
+| browser-use crawler | 295/313 crawls ended without a result; crawl inside the pika callback blocked heartbeats, causing redelivery | wallet_browser (vendored), crawl on a worker thread, crawled-domain dedup, refuses to start without `CLAUDE_CODE_OAUTH_TOKEN` | §3.18 |
+| chromedriver started twice per screenshot | ~1,000 orphaned chromedrivers per worker, OOM kills | removed manual `service.start()` | §3.13 |
+| no restart policy on certstream/rabbitmq | certstream OOM-killed, intake stopped for ~22h | `restart: unless-stopped` | §3.17 |
+
+Measured results:
+- Replaying September's 8,919 OCR positives (OCR text only), the corrected
+  lists pass 580 instead of 4,837; 279 of the 304 bad confirmations no
+  longer pass.
+- First two days with the fixes: 56 confirmed / 333 rejected, with reasons
+  like "promises" (29), "guarantee", "solicitation", on domains such as
+  bitloxy.com, cointradepro.org and growmoney.pro. Remaining false
+  positives are mostly meme-coin pages, prop-trading firms and signal
+  groups.
+- After the leak fix: 0 lingering chromedrivers per worker, host memory
+  steady at ~3.4 GiB (was 13 of 15 GiB).
+
+Data from before the fix (`results/validate/*_2609.*`,
+`results/crawler/wallet_extraction.jsonl` from browser-use) was produced by
+the broken filters and should not be used as ground truth.
