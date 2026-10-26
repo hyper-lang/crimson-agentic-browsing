@@ -380,6 +380,11 @@ Measured results:
 - After the leak fix: 0 lingering chromedrivers per worker, host memory
   steady at ~3.4 GiB (was 13 of 15 GiB).
 
-Data from before the fix (`results/validate/*_2609.*`,
-`results/crawler/wallet_extraction.jsonl` from browser-use) was produced by
-the broken filters and should not be used as ground truth.
+Everything produced before the fix (all of September, `2609`) was made by
+the broken filters and should not be used as ground truth. On the server it
+was moved out of the live folders into `archive/2609-prefix/`, keeping the
+same layout (`results/`, `data/`, `logs/`), so new output never mixes with
+it. The browser-use crawler rows are in
+`archive/2609-prefix/results/crawler/wallet_extraction_browseruse.jsonl`.
+The queues held nothing pre-fix: RabbitMQ's data volume was created with
+the fixed deploy on 2026-10-24.

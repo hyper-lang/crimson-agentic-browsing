@@ -13,3 +13,5 @@ __pycache__/
 /data/
 /logs/
 /results/
+# Pre-fix output moved out of the live folders (see PIPELINE.md §6).
+/archive/
