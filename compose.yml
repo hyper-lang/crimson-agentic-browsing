@@ -59,6 +59,11 @@ services:
       retries: 5
       start_period: 10s
     restart: unless-stopped
+    # Load the queue-cap policies at boot so they survive a volume recreate
+    # instead of living only in the broker's runtime state (set via rabbitmqctl).
+    volumes:
+      - ./rabbitmq/conf.d/20-load-definitions.conf:/etc/rabbitmq/conf.d/20-load-definitions.conf:ro
+      - ./rabbitmq/definitions.json:/etc/rabbitmq/definitions.json:ro
 
   certstream-server:
     image: ghcr.io/reloading01/certstream-server-rust:1.5.2

@@ -1,0 +1,17 @@
+{
+  "rabbit_version": "4.3.2",
+  "users": [],
+  "vhosts": [{"name": "/"}],
+  "permissions": [],
+  "parameters": [],
+  "global_parameters": [],
+  "policies": [
+    {"vhost": "/", "name": "urls-cap", "pattern": "^urls$", "apply-to": "queues", "priority": 0,
+     "definition": {"max-length": 2000000, "overflow": "drop-head"}},
+    {"vhost": "/", "name": "cryptoscams-cap", "pattern": "^cryptoscams$", "apply-to": "queues", "priority": 0,
+     "definition": {"max-length": 1000000, "overflow": "drop-head"}}
+  ],
+  "queues": [],
+  "exchanges": [],
+  "bindings": []
+}

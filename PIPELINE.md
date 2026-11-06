@@ -275,6 +275,13 @@ made it to stage 6.
 - `restart: unless-stopped` on every service, including `rabbitmq` and
   `certstream-server`. certstream had none, so a single OOM kill stopped
   all intake until someone noticed.
+- `urls` and `cryptoscams` are capped with RabbitMQ `max-length` + drop-head
+  policies (2M and 1M), so the queues can't grow without bound and fill the
+  disk (they had reached 73M / 20M, ~142 GB of mnesia). The policies are
+  loaded at boot from `rabbitmq/definitions.json` via a `conf.d` drop-in, so
+  they survive a volume recreate. Dropping the oldest is safe here: stale
+  filtered domains are almost certainly dead by the time a worker reaches
+  them.
 - `crimson-validate` now depends on `rabbitmq` being healthy — it had no
   such dependency before, since it never touched RabbitMQ at all.
 - Chromium + `chromium-driver` installed via apt directly in the shared
