@@ -275,6 +275,13 @@ made it to stage 6.
 - `restart: unless-stopped` on every service, including `rabbitmq` and
   `certstream-server`. certstream had none, so a single OOM kill stopped
   all intake until someone noticed.
+- `data/` is pruned to keep only confirmed scams. recv saves a screenshot +
+  HTML for every content-filter positive, far more than validate confirms,
+  and nothing deleted the rest, so `data/` grew ~14 GB/day. `scripts/prune_data.py`
+  (cron, every 6h on the server) keeps every domain in
+  `results/validate/confirmed_scams_*.jsonl` and deletes any other domain
+  folder older than a 24h grace window (so in-flight, not-yet-classified
+  domains survive). First run freed ~88 GB.
 - `urls` and `cryptoscams` are capped with RabbitMQ `max-length` + drop-head
   policies (2M and 1M), so the queues can't grow without bound and fill the
   disk (they had reached 73M / 20M, ~142 GB of mnesia). The policies are
