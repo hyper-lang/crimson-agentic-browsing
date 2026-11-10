@@ -207,10 +207,9 @@ message forever — the process would look perfectly healthy in
 `wordninja` → `wordninja-enhanced` (your change, to add crypto-specific
 words without the missing custom language model file). `tldextract`,
 `nltk`, and `wordninja-enhanced` itself were never in any requirements file
-and had to be added. The stray `logging` and misordered `psutil` entries
-that appeared in an intermediate version of `requirements.txt` were removed
-— `logging` is stdlib and the PyPI package of that name doesn't install
-under Python 3 at all.
+and had to be added. A stray `logging` entry (stdlib — the PyPI package of
+that name doesn't install under Python 3 at all) and `psutil` (listed but
+imported nowhere in the code) were removed.
 
 ### 3.13 `utils/screenshot.py`: no remote Selenium Grid, hardcoded local Chrome path
 `SeleniumScreenshot` never used a remote WebDriver — it launches Chrome
